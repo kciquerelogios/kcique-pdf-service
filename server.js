@@ -61,29 +61,27 @@ async function loginHandler(req, res) {
     await loginPage.setViewport({ width: 1280, height: 800 });
 
     // Aguardar Vue renderizar os inputs
-    await loginPage.goto('https://melhorenvio.com.br/login', { waitUntil: 'networkidle2', timeout: 20000 });
+    await loginPage.goto('https://melhorenvio.com.br/login', { waitUntil: 'domcontentloaded', timeout: 20000 });
     
-    // Aguardar input de email aparecer (Vue carrega dinamicamente)
-    await loginPage.waitForSelector('input[type="email"], input[type="text"]', { timeout: 10000 });
-    await new Promise(r => setTimeout(r, 1000));
-
-    // Encontrar todos os inputs visíveis
-    const inputs = await loginPage.$$('input');
+    // Aguardar input aparecer com polling (Vue carrega async)
     let emailInput = null, passInput = null;
-    for (const input of inputs) {
-      const type = await input.evaluate(el => el.type);
-      const placeholder = await input.evaluate(el => el.placeholder || '');
-      const name = await input.evaluate(el => el.name || '');
-      console.log('Input:', type, name, placeholder);
-      if (type === 'email' || name === 'email' || placeholder.toLowerCase().includes('email') || placeholder.toLowerCase().includes('cpf')) {
-        emailInput = input;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await new Promise(r => setTimeout(r, 1000));
+      const inputs = await loginPage.$$('input');
+      for (const input of inputs) {
+        const type = await input.evaluate(el => el.type).catch(()=>'');
+        const placeholder = await input.evaluate(el => el.placeholder || '').catch(()=>'');
+        const visible = await input.evaluate(el => el.offsetParent !== null).catch(()=>false);
+        console.log('Input attempt', attempt, ':', type, placeholder, 'visible:', visible);
+        if (visible && (type === 'email' || type === 'text' || placeholder.toLowerCase().includes('cpf') || placeholder.toLowerCase().includes('email'))) emailInput = input;
+        if (visible && type === 'password') passInput = input;
       }
-      if (type === 'password') passInput = input;
+      if (emailInput && passInput) break;
     }
 
     if (!emailInput || !passInput) {
       const html = await loginPage.content();
-      return res.json({ status: 'error', message: 'Inputs nao encontrados', html: html.substring(2000, 3000) });
+      return res.json({ status: 'error', message: 'Inputs nao encontrados apos 20s', inputs_found: (await loginPage.$$('input')).length });
     }
 
     await emailInput.click({ clickCount: 3 });
