@@ -232,6 +232,18 @@ app.get('/debug', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// Endpoint para injetar cookies manualmente
+app.post('/set-cookies', async (req, res) => {
+  const { secret } = req.query;
+  if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { cookies } = req.body;
+    fs.writeFileSync(COOKIES_FILE, JSON.stringify(cookies));
+    console.log('Cookies injetados:', cookies.length);
+    res.json({ ok: true, count: cookies.length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/health', (req, res) => res.json({ ok: true, loggedIn: fs.existsSync(COOKIES_FILE), ts: new Date().toISOString() }));
 
 app.listen(PORT, () => console.log('PDF service rodando na porta', PORT));
