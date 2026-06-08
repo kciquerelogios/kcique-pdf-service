@@ -202,9 +202,37 @@ app.get('/pdf/:orderId', async (req, res) => {
       await page.close();
       return res.status(401).json({ error: 'not_logged_in', message: 'Faca login primeiro via /login' });
     }
-    await page.goto(`https://melhorenvio.com.br/imprimir/${orderId}`, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.goto(`https://melhorenvio.com.br/imprimir/${orderId}`, { waitUntil: 'networkidle0', timeout: 30000 });
     await new Promise(r => setTimeout(r, 3000));
-    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+
+    // Verificar conteúdo da página
+    const pageContent = await page.content();
+    const temDace = pageContent.includes('DACE') || pageContent.includes('Declaração') || pageContent.includes('declaracao');
+    console.log('Pagina tem DACE:', temDace, '| HTML length:', pageContent.length);
+
+    // Clicar no botão de imprimir se existir (alguns sites têm botão que carrega a DACE)
+    try {
+      const printBtn = await page.$('button[onclick*="print"], button.print, .btn-print, #print-btn');
+      if (printBtn) {
+        console.log('Botao imprimir encontrado, clicando...');
+        await printBtn.click();
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    } catch(e) {}
+
+    // Aguardar mais se não tiver DACE
+    if (!temDace) {
+      console.log('DACE nao encontrada, aguardando mais 5s...');
+      await new Promise(r => setTimeout(r, 5000));
+    }
+
+    // Gerar PDF com todas as páginas
+    const pdfBuffer = await page.pdf({ 
+      format: 'A4', 
+      printBackground: true, 
+      preferCSSPageSize: false,
+      margin: { top: '0', right: '0', bottom: '0', left: '0' }
+    });
     await saveCookies(page);
     await page.close();
     console.log('PDF gerado:', pdfBuffer.length, 'bytes');
