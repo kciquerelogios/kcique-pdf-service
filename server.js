@@ -203,35 +203,34 @@ app.get('/pdf/:orderId', async (req, res) => {
       return res.status(401).json({ error: 'not_logged_in', message: 'Faca login primeiro via /login' });
     }
     await page.goto(`https://melhorenvio.com.br/imprimir/${orderId}`, { waitUntil: 'networkidle0', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 3000));
 
-    // Verificar conteúdo da página
-    const pageContent = await page.content();
-    const temDace = pageContent.includes('DACE') || pageContent.includes('Declaração') || pageContent.includes('declaracao');
-    console.log('Pagina tem DACE:', temDace, '| HTML length:', pageContent.length);
-
-    // Clicar no botão de imprimir se existir (alguns sites têm botão que carrega a DACE)
+    // Aguardar o componente Vue me-printer-preview renderizar completamente
     try {
-      const printBtn = await page.$('button[onclick*="print"], button.print, .btn-print, #print-btn');
-      if (printBtn) {
-        console.log('Botao imprimir encontrado, clicando...');
-        await printBtn.click();
-        await new Promise(r => setTimeout(r, 2000));
-      }
-    } catch(e) {}
-
-    // Aguardar mais se não tiver DACE
-    if (!temDace) {
-      console.log('DACE nao encontrada, aguardando mais 5s...');
-      await new Promise(r => setTimeout(r, 5000));
+      await page.waitForFunction(() => {
+        const el = document.querySelector('me-printer-preview');
+        return el && el.shadowRoot 
+          ? el.shadowRoot.querySelectorAll('canvas, svg, img, table').length > 0
+          : el && el.querySelectorAll('canvas, svg, img, table').length > 0;
+      }, { timeout: 15000 });
+      console.log('me-printer-preview renderizado');
+    } catch(e) {
+      console.log('Timeout aguardando printer-preview, continuando...');
     }
+    await new Promise(r => setTimeout(r, 5000));
 
-    // Gerar PDF em paisagem para incluir etiqueta + DACE lado a lado
+    // Verificar conteúdo
+    const pageContent = await page.content();
+    console.log('HTML length:', pageContent.length);
+
+    // Emular print media DEPOIS de carregar para não interferir no Vue
+    await page.emulateMediaType('print');
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Gerar PDF respeitando CSS de impressão
     const pdfBuffer = await page.pdf({ 
       format: 'A4',
-      landscape: true,
       printBackground: true,
-      preferCSSPageSize: false,
+      preferCSSPageSize: true,
       displayHeaderFooter: false,
       margin: { top: '0', right: '0', bottom: '0', left: '0' }
     });
