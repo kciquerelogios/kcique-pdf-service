@@ -60,6 +60,18 @@ async function loginHandler(req, res) {
     loginPage = await b.newPage();
     await loginPage.setViewport({ width: 1280, height: 800 });
 
+    // Interceptar reCAPTCHA antes de carregar a página
+    await loginPage.evaluateOnNewDocument(() => {
+      // Mockar o grecaptcha para retornar token fake
+      window.grecaptcha = {
+        ready: (cb) => cb(),
+        execute: () => Promise.resolve('fake-recaptcha-token'),
+        render: () => 0,
+        getResponse: () => 'fake-recaptcha-token'
+      };
+      window.isRecaptchaEnabled = false;
+    });
+
     // Aguardar Vue renderizar os inputs
     await loginPage.goto('https://melhorenvio.com.br/login', { waitUntil: 'domcontentloaded', timeout: 20000 });
     
