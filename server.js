@@ -184,6 +184,28 @@ app.get('/pdf/:orderId', async (req, res) => {
   }
 });
 
+// Debug: ver HTML da página atual do loginPage
+app.get('/debug', async (req, res) => {
+  const { secret } = req.query;
+  if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
+  if (!loginPage) return res.json({ error: 'Nenhuma pagina de login ativa' });
+  try {
+    const url = loginPage.url();
+    const html = await loginPage.content();
+    const inputs = await loginPage.$$('input');
+    const inputInfos = [];
+    for (const inp of inputs) {
+      inputInfos.push({
+        type: await inp.evaluate(el => el.type).catch(()=>''),
+        name: await inp.evaluate(el => el.name).catch(()=>''),
+        placeholder: await inp.evaluate(el => el.placeholder).catch(()=>''),
+        visible: await inp.evaluate(el => el.offsetParent !== null).catch(()=>false)
+      });
+    }
+    res.json({ url, inputs: inputInfos, html_snippet: html.substring(5000, 7000) });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/health', (req, res) => res.json({ ok: true, loggedIn: fs.existsSync(COOKIES_FILE), ts: new Date().toISOString() }));
 
 app.listen(PORT, () => console.log('PDF service rodando na porta', PORT));
