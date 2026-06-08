@@ -26,7 +26,16 @@ async function getBrowser() {
     browser = await puppeteer.launch({
       headless: 'new',
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-zygote','--single-process']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process',
+        '--enable-gpu',
+        '--window-size=1920,1080'
+      ]
     });
   }
   return browser;
@@ -203,20 +212,23 @@ app.get('/pdf/:orderId', async (req, res) => {
       return res.status(401).json({ error: 'not_logged_in', message: 'Faca login primeiro via /login' });
     }
     await page.goto(`https://melhorenvio.com.br/imprimir/${orderId}`, { waitUntil: 'networkidle0', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 3000));
 
-    // Aguardar o componente Vue me-printer-preview renderizar completamente
-    try {
-      await page.waitForFunction(() => {
-        const el = document.querySelector('me-printer-preview');
-        return el && el.shadowRoot 
-          ? el.shadowRoot.querySelectorAll('canvas, svg, img, table').length > 0
-          : el && el.querySelectorAll('canvas, svg, img, table').length > 0;
-      }, { timeout: 15000 });
-      console.log('me-printer-preview renderizado');
-    } catch(e) {
-      console.log('Timeout aguardando printer-preview, continuando...');
+    // Verificar se o Vue renderizou algum elemento filho no me-printer-preview
+    const vueRenderizado = await page.evaluate(() => {
+      const el = document.querySelector('me-printer-preview');
+      if (!el) return { ok: false, reason: 'elemento nao encontrado' };
+      const filhos = el.children.length;
+      const innerHTML = el.innerHTML.length;
+      return { ok: innerHTML > 100, filhos, innerHTML };
+    });
+    console.log('Vue status:', JSON.stringify(vueRenderizado));
+
+    // Aguardar mais se não renderizou
+    if (!vueRenderizado.ok) {
+      console.log('Aguardando Vue renderizar...');
+      await new Promise(r => setTimeout(r, 8000));
     }
-    await new Promise(r => setTimeout(r, 5000));
 
     // Verificar conteúdo
     const pageContent = await page.content();
