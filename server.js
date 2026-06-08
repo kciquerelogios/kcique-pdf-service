@@ -226,26 +226,14 @@ app.get('/pdf/:orderId', async (req, res) => {
       await new Promise(r => setTimeout(r, 5000));
     }
 
-    // Forçar visibilidade de todos os elementos antes de gerar PDF
-    await page.evaluate(() => {
-      // Remover CSS que esconde elementos na impressão
-      const style = document.createElement('style');
-      style.textContent = `
-        * { visibility: visible !important; display: block !important; }
-        .no-print, [class*="no-print"] { display: block !important; }
-        @media print { * { display: block !important; visibility: visible !important; } }
-      `;
-      document.head.appendChild(style);
-    });
-    await new Promise(r => setTimeout(r, 1000));
-
-    // Gerar PDF com todas as páginas
+    // Gerar PDF em paisagem para incluir etiqueta + DACE lado a lado
     const pdfBuffer = await page.pdf({ 
-      format: 'A4', 
-      printBackground: true, 
+      format: 'A4',
+      landscape: true,
+      printBackground: true,
       preferCSSPageSize: false,
       displayHeaderFooter: false,
-      margin: { top: '10mm', right: '5mm', bottom: '10mm', left: '5mm' }
+      margin: { top: '0', right: '0', bottom: '0', left: '0' }
     });
     await saveCookies(page);
     await page.close();
