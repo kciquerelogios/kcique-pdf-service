@@ -73,7 +73,7 @@ async function loginHandler(req, res) {
         const placeholder = await input.evaluate(el => el.placeholder || '').catch(()=>'');
         const visible = await input.evaluate(el => el.offsetParent !== null).catch(()=>false);
         console.log('Input attempt', attempt, ':', type, placeholder, 'visible:', visible);
-        if (visible && (type === 'email' || type === 'text' || placeholder.toLowerCase().includes('cpf') || placeholder.toLowerCase().includes('email'))) emailInput = input;
+        if (visible && (type === 'email' || name === 'username' || name === 'email' || type === 'text')) emailInput = input;
         if (visible && type === 'password') passInput = input;
       }
       if (emailInput && passInput) break;
@@ -94,12 +94,13 @@ async function loginHandler(req, res) {
       loginPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(()=>{})
     ]);
 
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 5000));
     const url = loginPage.url();
     const html = await loginPage.content();
     console.log('Login URL:', url);
+    console.log('HTML snippet:', html.substring(5000, 5500));
 
-    if (html.includes('código') || html.includes('code') || url.includes('two-factor') || url.includes('verify') || url.includes('security')) {
+    if (html.includes('código') || html.includes('code') || html.includes('acesso seguro') || html.includes('verificação') || url.includes('two-factor') || url.includes('verify') || url.includes('security')) {
       return res.json({ status: 'needs_2fa', message: 'Envie o codigo via /verify-code?secret=...&code=XXXXXX' });
     }
     if (!url.includes('/login')) {
