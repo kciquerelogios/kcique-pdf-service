@@ -12,21 +12,14 @@ const ME_SENHA = process.env.MELHORENVIO_SENHA || '';
 const COOKIES_FILE = '/tmp/me_cookies.json';
 
 let browser = null;
+let loginPage = null; // página mantida durante aguardo do código 2FA
 
 async function getBrowser() {
   if (!browser || !browser.isConnected()) {
     browser = await puppeteer.launch({
       headless: 'new',
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process'
-      ]
+      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-zygote','--single-process']
     });
   }
   return browser;
@@ -47,84 +40,128 @@ async function saveCookies(page) {
   try {
     const cookies = await page.cookies();
     fs.writeFileSync(COOKIES_FILE, JSON.stringify(cookies));
+    console.log('Cookies salvos:', cookies.length);
   } catch(e) {}
 }
 
 async function isLoggedIn(page) {
   try {
     await page.goto('https://melhorenvio.com.br/painel', { waitUntil: 'networkidle2', timeout: 15000 });
-    const url = page.url();
-    return !url.includes('/login');
+    return !page.url().includes('/login');
   } catch(e) { return false; }
 }
 
-async function doLogin(page) {
-  await page.goto('https://melhorenvio.com.br/login', { waitUntil: 'networkidle2', timeout: 15000 });
-  await page.type('input[name="email"]', ME_EMAIL, { delay: 50 });
-  await page.type('input[name="password"]', ME_SENHA, { delay: 50 });
-  await Promise.all([
-    page.click('button[type="submit"]'),
-    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 })
-  ]);
-  const url = page.url();
-  console.log('Login URL:', url);
-  return !url.includes('/login');
-}
+// Endpoint: iniciar login (retorna se precisa de código 2FA)
+app.post('/login', async (req, res) => {
+  const { secret } = req.query;
+  if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
+
+  try {
+    const b = await getBrowser();
+    if (loginPage) { try { await loginPage.close(); } catch(e) {} }
+    loginPage = await b.newPage();
+    await loginPage.setViewport({ width: 1280, height: 800 });
+
+    await loginPage.goto('https://melhorenvio.com.br/login', { waitUntil: 'networkidle2', timeout: 15000 });
+    await loginPage.type('input[name="email"]', ME_EMAIL, { delay: 50 });
+    await loginPage.type('input[name="password"]', ME_SENHA, { delay: 50 });
+    await Promise.all([
+      loginPage.click('button[type="submit"]'),
+      loginPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 })
+    ]);
+
+    const url = loginPage.url();
+    const html = await loginPage.content();
+    console.log('Login URL:', url);
+
+    // Verificar se pediu código 2FA
+    if (html.includes('código') || html.includes('code') || html.includes('verificação') || url.includes('two-factor') || url.includes('verify')) {
+      return res.json({ status: 'needs_2fa', message: 'Verifique seu email e envie o código via /verify-code' });
+    }
+
+    if (!url.includes('/login')) {
+      await saveCookies(loginPage);
+      await loginPage.close();
+      loginPage = null;
+      return res.json({ status: 'logged_in', message: 'Login realizado com sucesso!' });
+    }
+
+    return res.json({ status: 'failed', message: 'Login falhou', url });
+  } catch(e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// Endpoint: enviar código 2FA
+app.post('/verify-code', async (req, res) => {
+  const { secret, code } = req.query;
+  if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
+  if (!code) return res.status(400).json({ error: 'code required' });
+  if (!loginPage) return res.status(400).json({ error: 'Nenhum login em andamento. Chame /login primeiro.' });
+
+  try {
+    // Digitar o código na página
+    const inputs = await loginPage.$$('input[type="text"], input[type="number"], input[name="code"], input[name="token"]');
+    console.log('Inputs encontrados:', inputs.length);
+
+    if (inputs.length > 0) {
+      await inputs[0].click({ clickCount: 3 });
+      await inputs[0].type(code, { delay: 100 });
+    } else {
+      // Tentar digitar diretamente
+      await loginPage.keyboard.type(code);
+    }
+
+    // Submeter
+    await Promise.all([
+      loginPage.keyboard.press('Enter'),
+      loginPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(()=>{})
+    ]);
+
+    await new Promise(r => setTimeout(r, 2000));
+    const url = loginPage.url();
+    console.log('Após código URL:', url);
+
+    if (!url.includes('/login') && !url.includes('two-factor') && !url.includes('verify')) {
+      await saveCookies(loginPage);
+      await loginPage.close();
+      loginPage = null;
+      return res.json({ status: 'logged_in', message: 'Login com 2FA realizado! Cookies salvos.' });
+    }
+
+    return res.json({ status: 'failed', url, message: 'Código inválido ou ainda na página de verificação' });
+  } catch(e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
 
 // Endpoint principal - gerar PDF
 app.get('/pdf/:orderId', async (req, res) => {
   const { orderId } = req.params;
   const { secret } = req.query;
-
   if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
-  if (!orderId) return res.status(400).json({ error: 'orderId required' });
 
   let page = null;
   try {
     const b = await getBrowser();
     page = await b.newPage();
     await page.setViewport({ width: 1280, height: 800 });
-
-    // Carregar cookies salvos
     await loadCookies(page);
 
-    // Verificar se está logado
-    let loggedIn = await isLoggedIn(page);
+    const loggedIn = await isLoggedIn(page);
     console.log('Logged in:', loggedIn);
 
     if (!loggedIn) {
-      loggedIn = await doLogin(page);
-      if (!loggedIn) {
-        // Verificar se pediu aprovação por email
-        const html = await page.content();
-        if (html.includes('verificação') || html.includes('aprovação') || html.includes('email')) {
-          await page.close();
-          return res.status(202).json({ 
-            error: 'approval_required', 
-            message: 'Aprovação por email necessária. Verifique seu email e aprove o acesso, depois tente novamente.' 
-          });
-        }
-        await page.close();
-        return res.status(401).json({ error: 'Login falhou' });
-      }
-      await saveCookies(page);
+      await page.close();
+      return res.status(401).json({ error: 'not_logged_in', message: 'Faça login primeiro via POST /login' });
     }
 
-    // Acessar link de impressão
     const printUrl = `https://melhorenvio.com.br/imprimir/${orderId}`;
     console.log('Acessando:', printUrl);
     await page.goto(printUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-
-    // Aguardar carregamento
     await new Promise(r => setTimeout(r, 2000));
 
-    // Gerar PDF
-    const pdfBuffer = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: { top: '0', right: '0', bottom: '0', left: '0' }
-    });
-
+    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
     await saveCookies(page);
     await page.close();
 
@@ -141,6 +178,6 @@ app.get('/pdf/:orderId', async (req, res) => {
 });
 
 // Health check
-app.get('/health', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+app.get('/health', (req, res) => res.json({ ok: true, loggedIn: fs.existsSync(COOKIES_FILE), ts: new Date().toISOString() }));
 
 app.listen(PORT, () => console.log('PDF service rodando na porta', PORT));
