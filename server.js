@@ -85,14 +85,27 @@ async function loginHandler(req, res) {
     }
 
     await emailInput.click({ clickCount: 3 });
-    await emailInput.type(ME_EMAIL, { delay: 50 });
+    await emailInput.type(ME_EMAIL, { delay: 80 });
+    await new Promise(r => setTimeout(r, 500));
     await passInput.click({ clickCount: 3 });
-    await passInput.type(ME_SENHA, { delay: 50 });
+    await passInput.type(ME_SENHA, { delay: 80 });
+    await new Promise(r => setTimeout(r, 1000));
 
-    await Promise.all([
-      loginPage.keyboard.press('Enter'),
-      loginPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(()=>{})
-    ]);
+    // Tentar clicar no botão de submit
+    const submitBtn = await loginPage.$('button[type="submit"], button.btn-login, input[type="submit"]');
+    console.log('Submit button found:', !!submitBtn);
+    
+    if (submitBtn) {
+      await Promise.all([
+        submitBtn.click(),
+        loginPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(()=>{})
+      ]);
+    } else {
+      await Promise.all([
+        loginPage.keyboard.press('Enter'),
+        loginPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(()=>{})
+      ]);
+    }
 
     await new Promise(r => setTimeout(r, 5000));
     const url = loginPage.url();
