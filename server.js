@@ -51,8 +51,10 @@ async function isLoggedIn(page) {
   } catch(e) { return false; }
 }
 
-// Endpoint: iniciar login (retorna se precisa de código 2FA)
-app.post('/login', async (req, res) => {
+// Endpoint: iniciar login via GET ou POST
+app.get('/login', async (req, res) => { return loginHandler(req, res); });
+app.post('/login', async (req, res) => { return loginHandler(req, res); });
+async function loginHandler(req, res) {
   const { secret } = req.query;
   if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -92,8 +94,10 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// Endpoint: enviar código 2FA
-app.post('/verify-code', async (req, res) => {
+// Endpoint: enviar código 2FA via GET ou POST
+app.get('/verify-code', async (req, res) => { return verifyHandler(req, res); });
+app.post('/verify-code', async (req, res) => { return verifyHandler(req, res); });
+async function verifyHandler(req, res) {
   const { secret, code } = req.query;
   if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
   if (!code) return res.status(400).json({ error: 'code required' });
