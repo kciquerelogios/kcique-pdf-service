@@ -51,7 +51,6 @@ async function isLoggedIn(page) {
   } catch(e) { return false; }
 }
 
-// Login handler
 async function loginHandler(req, res) {
   const { secret } = req.query;
   if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
@@ -60,18 +59,50 @@ async function loginHandler(req, res) {
     if (loginPage) { try { await loginPage.close(); } catch(e) {} }
     loginPage = await b.newPage();
     await loginPage.setViewport({ width: 1280, height: 800 });
-    await loginPage.goto('https://melhorenvio.com.br/login', { waitUntil: 'networkidle2', timeout: 15000 });
-    await loginPage.type('input[name="email"]', ME_EMAIL, { delay: 50 });
-    await loginPage.type('input[name="password"]', ME_SENHA, { delay: 50 });
+
+    // Aguardar Vue renderizar os inputs
+    await loginPage.goto('https://melhorenvio.com.br/login', { waitUntil: 'networkidle2', timeout: 20000 });
+    
+    // Aguardar input de email aparecer (Vue carrega dinamicamente)
+    await loginPage.waitForSelector('input[type="email"], input[type="text"]', { timeout: 10000 });
+    await new Promise(r => setTimeout(r, 1000));
+
+    // Encontrar todos os inputs visíveis
+    const inputs = await loginPage.$$('input');
+    let emailInput = null, passInput = null;
+    for (const input of inputs) {
+      const type = await input.evaluate(el => el.type);
+      const placeholder = await input.evaluate(el => el.placeholder || '');
+      const name = await input.evaluate(el => el.name || '');
+      console.log('Input:', type, name, placeholder);
+      if (type === 'email' || name === 'email' || placeholder.toLowerCase().includes('email') || placeholder.toLowerCase().includes('cpf')) {
+        emailInput = input;
+      }
+      if (type === 'password') passInput = input;
+    }
+
+    if (!emailInput || !passInput) {
+      const html = await loginPage.content();
+      return res.json({ status: 'error', message: 'Inputs nao encontrados', html: html.substring(2000, 3000) });
+    }
+
+    await emailInput.click({ clickCount: 3 });
+    await emailInput.type(ME_EMAIL, { delay: 50 });
+    await passInput.click({ clickCount: 3 });
+    await passInput.type(ME_SENHA, { delay: 50 });
+
     await Promise.all([
-      loginPage.click('button[type="submit"]'),
-      loginPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 })
+      loginPage.keyboard.press('Enter'),
+      loginPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(()=>{})
     ]);
+
+    await new Promise(r => setTimeout(r, 3000));
     const url = loginPage.url();
     const html = await loginPage.content();
     console.log('Login URL:', url);
-    if (html.includes('código') || html.includes('code') || url.includes('two-factor') || url.includes('verify')) {
-      return res.json({ status: 'needs_2fa', message: 'Verifique seu email e envie o código via /verify-code?secret=...&code=XXXXXX' });
+
+    if (html.includes('código') || html.includes('code') || url.includes('two-factor') || url.includes('verify') || url.includes('security')) {
+      return res.json({ status: 'needs_2fa', message: 'Envie o codigo via /verify-code?secret=...&code=XXXXXX' });
     }
     if (!url.includes('/login')) {
       await saveCookies(loginPage);
@@ -81,19 +112,20 @@ async function loginHandler(req, res) {
     }
     return res.json({ status: 'failed', message: 'Login falhou', url });
   } catch(e) {
+    console.error('Login error:', e.message);
     return res.status(500).json({ error: e.message });
   }
 }
 
-// Verify code handler
 async function verifyHandler(req, res) {
   const { secret, code } = req.query;
   if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
   if (!code) return res.status(400).json({ error: 'code required' });
   if (!loginPage) return res.status(400).json({ error: 'Nenhum login em andamento. Chame /login primeiro.' });
   try {
-    const inputs = await loginPage.$$('input[type="text"], input[type="number"], input[name="code"], input[name="token"]');
-    console.log('Inputs encontrados:', inputs.length);
+    await loginPage.waitForSelector('input', { timeout: 5000 }).catch(()=>{});
+    const inputs = await loginPage.$$('input[type="text"], input[type="number"], input[type="tel"]');
+    console.log('Inputs para codigo:', inputs.length);
     if (inputs.length > 0) {
       await inputs[0].click({ clickCount: 3 });
       await inputs[0].type(code, { delay: 100 });
@@ -107,13 +139,13 @@ async function verifyHandler(req, res) {
     await new Promise(r => setTimeout(r, 2000));
     const url = loginPage.url();
     console.log('Apos codigo URL:', url);
-    if (!url.includes('/login') && !url.includes('two-factor') && !url.includes('verify')) {
+    if (!url.includes('/login') && !url.includes('two-factor') && !url.includes('verify') && !url.includes('security')) {
       await saveCookies(loginPage);
       await loginPage.close();
       loginPage = null;
       return res.json({ status: 'logged_in', message: 'Login com 2FA realizado! Cookies salvos.' });
     }
-    return res.json({ status: 'failed', url, message: 'Codigo invalido ou ainda na pagina de verificacao' });
+    return res.json({ status: 'failed', url });
   } catch(e) {
     return res.status(500).json({ error: e.message });
   }
@@ -124,7 +156,6 @@ app.post('/login', loginHandler);
 app.get('/verify-code', verifyHandler);
 app.post('/verify-code', verifyHandler);
 
-// Gerar PDF
 app.get('/pdf/:orderId', async (req, res) => {
   const { orderId } = req.params;
   const { secret } = req.query;
@@ -136,15 +167,12 @@ app.get('/pdf/:orderId', async (req, res) => {
     await page.setViewport({ width: 1280, height: 800 });
     await loadCookies(page);
     const loggedIn = await isLoggedIn(page);
-    console.log('Logged in:', loggedIn);
     if (!loggedIn) {
       await page.close();
       return res.status(401).json({ error: 'not_logged_in', message: 'Faca login primeiro via /login' });
     }
-    const printUrl = `https://melhorenvio.com.br/imprimir/${orderId}`;
-    console.log('Acessando:', printUrl);
-    await page.goto(printUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 2000));
+    await page.goto(`https://melhorenvio.com.br/imprimir/${orderId}`, { waitUntil: 'networkidle2', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 3000));
     const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
     await saveCookies(page);
     await page.close();
@@ -153,7 +181,6 @@ app.get('/pdf/:orderId', async (req, res) => {
     res.set('Content-Disposition', `attachment; filename="etiqueta-${orderId}.pdf"`);
     res.send(pdfBuffer);
   } catch(e) {
-    console.error('Erro:', e.message);
     if (page) await page.close().catch(()=>{});
     res.status(500).json({ error: e.message });
   }
